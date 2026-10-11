@@ -1,0 +1,7 @@
+retry
+    ->userService
+        ->contestSubmision
+
+circuitBreaker
+    ->userService
+        ->registerIntoContest

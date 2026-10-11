@@ -1,0 +1,69 @@
+#circuit breaker setup
+management:
+  health:
+    circuitbreakers:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+  endpoint:
+    health:
+      show-details: always
+
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      circuitBreakerTemplate:
+        registerHealthIndicator: true
+        # Registers this circuit breaker with Spring Boot Actuator's /actuator/health endpoint
+        # Real-life: Like a health-check panel in a hospital to track patient status.
+
+        eventConsumerBufferSize: 10
+        # How many recent events (success/failure) are stored for monitoring and metrics
+        # Real-life: Like keeping last 10 CCTV recordings to analyze customer behavior.
+
+        failureRateThreshold: 50
+        # If 50% of the requests fail within the sliding window, it trips (goes to OPEN state)
+        # Real-life: If 5 out of 10 products are returned in quality check, the machine is stopped.
+
+        minimumNumberOfCalls: 5
+        # Minimum number of requests needed before calculating the failure rate
+        # Real-life: You don’t judge a restaurant on 1 review—you need at least 5.
+
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        # After the wait duration, it auto switches from OPEN to HALF_OPEN (to test again)
+        # Real-life: Like giving a failed student a retest chance after some break.
+
+        waitDurationInOpenState: 6s
+        # Time to wait in OPEN state before transitioning to HALF_OPEN for retry testing
+        # Real-life: Machine cooling time before checking if it can be restarted safely.
+
+        permittedNumberOfCallsInHalfOpenState: 3
+        # In HALF_OPEN state, allow only 3 trial requests to check if it's healthy again
+        # Real-life: Test with 3 pilot runs before restarting full factory operation.
+
+        slidingWindowSize: 10
+        # How many recent calls are evaluated to calculate failure rate
+        # Real-life: Like a moving average—judge based on last 10 service calls.
+
+        slidingWindowType: COUNT_BASED
+        # COUNT_BASED means the window size is based on number of calls (not time)
+        # Real-life: Judge based on fixed 10 transactions, not time (like “last 10 customers” not “last 10 minutes”)
+  retry:
+    instances:
+      retryTemplate:
+        max-attempts: 3
+        wait-duration: 5s
+
+  rateLimiter:
+    instances:
+      rateLimiterTemplate:
+        limit-refresh-period: 4s # this define the time
+        limit-for-period: 5 #this define how many request can be accept in given time
+        timeout-duration: 4s # if in given time defined requeest no exceed then it define how much time to wait
+
+
+

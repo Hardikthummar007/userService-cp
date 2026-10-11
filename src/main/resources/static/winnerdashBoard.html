@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Contest Leaderboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs/lib/stomp.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500&display=swap');
+
+        body {
+          margin: 0;
+          font-family: 'Inter', sans-serif;
+          background-color: #f5f7fa;
+          color: #1e1e1e;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+
+        h1 {
+          margin: 40px 0 20px;
+          font-size: 2.5em;
+          color: #24292f;
+        }
+
+        table {
+          border-collapse: collapse;
+          width: 90%;
+          max-width: 1000px;
+          background: #fff;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          border-radius: 10px;
+          overflow: hidden;
+        }
+
+        th, td {
+          text-align: center;
+          padding: 16px;
+          font-size: 1em;
+          border-bottom: 1px solid #e1e4e8;
+        }
+
+        th {
+          background-color: #f6f8fa;
+          color: #6a737d;
+          font-weight: 600;
+        }
+
+        tr:hover {
+          background-color: #f0f0f0;
+        }
+
+        .rank {
+          font-weight: bold;
+          color: #24292f;
+        }
+
+        .username {
+          font-weight: 600;
+          color: #0366d6;
+        }
+
+        .solved {
+          color: #28a745;
+          font-weight: bold;
+        }
+
+        .time {
+          color: #6f42c1;
+        }
+    </style>
+</head>
+<body>
+
+<h1>🏆 Contest Leaderboard</h1>
+<table id="winner-board">
+    <thead>
+    <tr>
+        <th>Rank</th>
+        <th>User ID</th>
+        <th>problem Solved</th>
+        <th>Ending Time</th>
+    </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<script>
+    let stompClient = null;
+
+    function connect() {
+      const socket = new SockJS('http://localhost:8084/ws'); // WebSocket endpoint
+      stompClient = Stomp.over(socket);
+
+      stompClient.connect({}, function (frame) {
+        console.log('Connected: ' + frame);
+        loadWinnersFromStorage();
+
+        stompClient.subscribe('/topic/getWinner', function (response) {
+          const winners = JSON.parse(response.body);
+          clearBoard();
+          winners.forEach(displayWinner);
+          localStorage.setItem('winners', JSON.stringify(winners));
+        });
+      }, function (error) {
+        console.error('Connection failed:', error);
+      });
+    }
+
+    function displayWinner(winner, index) {
+      const tableBody = document.querySelector('#winner-board tbody');
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td class="rank">#${index + 1}</td>
+        <td class="username">${winner.userId}</td>
+        <td class="solved">${winner.howManyTestCasePassed}</td>
+        <td class="time">${winner.endingTime}</td>
+      `;
+      tableBody.appendChild(row);
+    }
+
+    function clearBoard() {
+      document.querySelector('#winner-board tbody').innerHTML = '';
+    }
+
+    function loadWinnersFromStorage() {
+      const stored = localStorage.getItem('winners');
+      if (stored) {
+        const winners = JSON.parse(stored);
+        clearBoard();
+        winners.forEach(displayWinner);
+      }
+    }
+
+    connect();
+</script>
+</body>
+</html>

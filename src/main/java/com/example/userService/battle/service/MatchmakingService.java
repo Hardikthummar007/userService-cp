@@ -143,7 +143,13 @@ public class MatchmakingService {
         activeBattlePlayers.add(player2);
 
         // Delegate battle creation, persistence, problem selection and start countdown to BattleService
-        battleService.createBattle(player1, player2);
+        try {
+            battleService.createBattle(player1, player2);
+        } catch (Exception e) {
+            logger.error("Failed to create battle between '{}' and '{}': {}", player1, player2, e.getMessage(), e);
+            activeBattlePlayers.remove(player1);
+            activeBattlePlayers.remove(player2);
+        }
     }
 
     public boolean isUserInQueue(String username) {

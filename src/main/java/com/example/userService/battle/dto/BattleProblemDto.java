@@ -36,7 +36,31 @@ public class BattleProblemDto {
             dto.setDifficulty(p.getDifficulty());
             dto.setInputLimit(p.getInputLimit());
             dto.setOutputLimit(p.getOutputLimit());
-            dto.setSampleIOS(p.getSampleIOS() != null ? p.getSampleIOS() : new ArrayList<>());
+
+            List<sampleIO> validSamples = new ArrayList<>();
+            if (p.getSampleIOS() != null) {
+                for (sampleIO s : p.getSampleIOS()) {
+                    if (s != null && s.getInput() != null && !s.getInput().isBlank()) {
+                        validSamples.add(s);
+                    }
+                }
+            }
+
+            // Fallback: If sampleIOS is empty, use first 2 test cases as sample cases
+            if (validSamples.isEmpty() && p.getTestCases() != null && !p.getTestCases().isEmpty()) {
+                int count = Math.min(2, p.getTestCases().size());
+                for (int i = 0; i < count; i++) {
+                    com.example.userService.dto.testCases tc = p.getTestCases().get(i);
+                    sampleIO sample = new sampleIO();
+                    sample.setInput(tc.getTc_input());
+                    sample.setOutput(tc.getTc_ouput());
+                    sample.setTestcaseInput(tc.getTc_input());
+                    sample.setExpectedOutput(tc.getTc_ouput());
+                    validSamples.add(sample);
+                }
+            }
+
+            dto.setSampleIOS(validSamples);
             dto.setHints(p.getHints() != null ? p.getHints() : new ArrayList<>());
             dto.setTopics(p.getTopics() != null ? p.getTopics() : new ArrayList<>());
         }

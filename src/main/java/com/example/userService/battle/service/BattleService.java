@@ -26,6 +26,10 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import com.example.userService.battle.dto.BattleEndDto;
+import com.example.userService.battle.dto.BattleSubmissionRequest;
+import com.example.userService.battle.dto.OpponentProgressDto;
+import org.springframework.context.annotation.Lazy;
 
 /**
  * Core business service managing 1v1 battle lifecycle:
@@ -57,6 +61,13 @@ public class BattleService {
     @Autowired
     private ThreadPoolTaskScheduler battleTaskScheduler;
 
+    @Autowired
+    private BattleJudgeService battleJudgeService;
+
+    @Autowired
+    @Lazy
+    private MatchmakingService matchmakingService;
+
     @Value("${battle.duration-minutes:20}")
     private int durationMinutes;
 
@@ -69,6 +80,9 @@ public class BattleService {
     // Cache to quickly look up participants for subscription authorization
     private final Map<Long, Set<String>> battleParticipantsCache = new ConcurrentHashMap<>();
 
+    // 5-second rate limiting map per player per battle: key = "battleId:username"
+    private final Map<String, Instant> playerLastSubmitTime = new ConcurrentHashMap<>();
+
     /**
      * Creates a new Battle in WAITING status, notifies both players,
      * and schedules the 3-second start timer.
@@ -76,6 +90,10 @@ public class BattleService {
     @org.springframework.transaction.annotation.Transactional
     public Battle createBattle(String player1, String player2) {
         logger.info("Creating battle between '{}' and '{}'", player1, player2);
+
+        // 0. Ensure players exist in user table to satisfy foreign key constraints
+        ensureUserExists(player1);
+        ensureUserExists(player2);
 
         // 1. Select a problem matching allowed difficulties that neither player has solved
         problems chosenProblem = selectProblemForPlayers(player1, player2);
@@ -159,11 +177,164 @@ public class BattleService {
     }
 
     /**
+     * Submits code for a battle:
+     * - Validates battle is ACTIVE and not expired
+     * - Validates user is a participant
+     * - Checks 5-second rate limit
+     * - Runs isolated judging without side effects
+     * - Updates player's best passed count in DB
+     * - Notifies opponent privately of test case progress
+     * - Atomically declares winner if all test cases passed
+     */
+    public Map<String, Object> submitCode(Long battleId, String username, BattleSubmissionRequest request) {
+        Optional<Battle> battleOpt = battleRepository.findById(battleId);
+        if (battleOpt.isEmpty()) {
+            throw new NoSuchElementException("Battle #" + battleId + " not found");
+        }
+
+        Battle battle = battleOpt.get();
+
+        if (battle.getStatus() != BattleStatus.ACTIVE) {
+            throw new IllegalStateException("Battle #" + battleId + " is not ACTIVE (status: " + battle.getStatus() + ")");
+        }
+
+        Instant now = Instant.now();
+        if (battle.getEndTime() != null && now.isAfter(battle.getEndTime())) {
+            throw new IllegalStateException("Battle #" + battleId + " duration has expired");
+        }
+
+        if (!username.equals(battle.getPlayer1()) && !username.equals(battle.getPlayer2())) {
+            throw new SecurityException("User '" + username + "' is not a participant of battle #" + battleId);
+        }
+
+        // 5-second rate limit check per player per battle
+        String rateLimitKey = battleId + ":" + username;
+        Instant lastSubmit = playerLastSubmitTime.get(rateLimitKey);
+        if (lastSubmit != null && Duration.between(lastSubmit, now).toSeconds() < 5) {
+            long waitSec = 5 - Duration.between(lastSubmit, now).toSeconds();
+            throw new IllegalStateException("Rate limit: please wait " + waitSec + "s before submitting again");
+        }
+        playerLastSubmitTime.put(rateLimitKey, now);
+
+        if (request == null || request.getCode() == null) {
+            throw new IllegalArgumentException("Submission code cannot be empty");
+        }
+
+        // 1. Run isolated judge (never updates user profile or normal submissions)
+        Map<String, Object> judgeResult = battleJudgeService.judgeCodeWithoutSideEffects(
+                battle.getProblemId(),
+                request.getCode()
+        );
+
+        int totalPassed = 0;
+        if (judgeResult.get("totalTestCasePassed") instanceof Number) {
+            totalPassed = ((Number) judgeResult.get("totalTestCasePassed")).intValue();
+        }
+
+        int totalTests = battle.getTotalTests() != null ? battle.getTotalTests() : 0;
+        if (totalTests == 0 && judgeResult.get("totalTestCase") instanceof Number) {
+            totalTests = ((Number) judgeResult.get("totalTestCase")).intValue();
+            battle.setTotalTests(totalTests);
+        }
+
+        // 2. Update player's best score in DB if improved
+        boolean isP1 = username.equals(battle.getPlayer1());
+        if (isP1) {
+            if (totalPassed > battle.getP1BestPassed()) {
+                battle.setP1BestPassed(totalPassed);
+                battle.setP1BestAt(now);
+            }
+        } else {
+            if (totalPassed > battle.getP2BestPassed()) {
+                battle.setP2BestPassed(totalPassed);
+                battle.setP2BestAt(now);
+            }
+        }
+        battleRepository.save(battle);
+
+        // 3. Notify opponent privately with test progress (NO code details)
+        String opponent = isP1 ? battle.getPlayer2() : battle.getPlayer1();
+        try {
+            OpponentProgressDto progressDto = new OpponentProgressDto(totalPassed, totalTests);
+            messagingTemplate.convertAndSendToUser(opponent, "/queue/opponent", progressDto);
+            logger.info("Sent OPPONENT_SUBMITTED (passed={}/{}) to '{}' for battle #{}",
+                    totalPassed, totalTests, opponent, battleId);
+        } catch (Exception e) {
+            logger.error("Failed to send opponent progress to '{}': {}", opponent, e.getMessage());
+        }
+
+        // 4. Check Win Condition: if all test cases passed
+        boolean passedAll = Boolean.TRUE.equals(judgeResult.get("passedOrNot"));
+        if (passedAll && totalTests > 0) {
+            int updated = battleRepository.finishBattleAtomic(battleId, username, BattleEndReason.SOLVED);
+            if (updated == 1) {
+                logger.info("🏆 Battle #{} solved by '{}'! Declaring official winner.", battleId, username);
+                broadcastBattleEnd(battleId, username, BattleEndReason.SOLVED);
+                cleanupBattlePlayers(battle.getPlayer1(), battle.getPlayer2());
+            }
+        }
+
+        return judgeResult;
+    }
+
+    /**
      * Called when the 20-minute battle timer expires.
      */
     public void onBattleTimeout(Long battleId) {
         logger.info("Battle timer expired for battle #{}", battleId);
-        // Will be connected with full timeout winner determination logic in Phase 4
+
+        Optional<Battle> battleOpt = battleRepository.findById(battleId);
+        if (battleOpt.isEmpty()) {
+            return;
+        }
+
+        Battle battle = battleOpt.get();
+        if (battle.getStatus() != BattleStatus.ACTIVE) {
+            logger.info("Battle #{} is already finished (status: {}). Ignoring timeout.", battleId, battle.getStatus());
+            return;
+        }
+
+        // Determine winner based on best passed count, then earlier submission time
+        int p1Passed = battle.getP1BestPassed();
+        int p2Passed = battle.getP2BestPassed();
+        String winner = null;
+
+        if (p1Passed > p2Passed) {
+            winner = battle.getPlayer1();
+        } else if (p2Passed > p1Passed) {
+            winner = battle.getPlayer2();
+        } else if (p1Passed > 0) {
+            // Tie breaker: whoever achieved their best passed score first
+            if (battle.getP1BestAt() != null && battle.getP2BestAt() != null) {
+                if (battle.getP1BestAt().isBefore(battle.getP2BestAt())) {
+                    winner = battle.getPlayer1();
+                } else if (battle.getP2BestAt().isBefore(battle.getP1BestAt())) {
+                    winner = battle.getPlayer2();
+                }
+            } else if (battle.getP1BestAt() != null) {
+                winner = battle.getPlayer1();
+            } else if (battle.getP2BestAt() != null) {
+                winner = battle.getPlayer2();
+            }
+        }
+
+        int updated = battleRepository.finishBattleAtomic(battleId, winner, BattleEndReason.TIMEOUT);
+        if (updated == 1) {
+            logger.info("⏰ Battle #{} ended by TIMEOUT. Winner: '{}'", battleId, winner);
+            broadcastBattleEnd(battleId, winner, BattleEndReason.TIMEOUT);
+            cleanupBattlePlayers(battle.getPlayer1(), battle.getPlayer2());
+        }
+    }
+
+    private void broadcastBattleEnd(Long battleId, String winner, BattleEndReason reason) {
+        BattleEndDto payload = new BattleEndDto(battleId, winner, reason.name());
+        messagingTemplate.convertAndSend("/topic/battle/" + battleId, payload);
+        logger.info("Broadcasted BATTLE_END for battle #{} (winner: {}, reason: {})", battleId, winner, reason);
+    }
+
+    private void cleanupBattlePlayers(String player1, String player2) {
+        matchmakingService.removeActiveBattlePlayer(player1);
+        matchmakingService.removeActiveBattlePlayer(player2);
     }
 
     /**
@@ -289,5 +460,15 @@ public class BattleService {
 
     public Optional<Battle> getBattleById(Long battleId) {
         return battleRepository.findById(battleId);
+    }
+
+    private void ensureUserExists(String username) {
+        if (username != null && !userRepo.existsById(username)) {
+            com.example.userService.entity.user u = new com.example.userService.entity.user();
+            u.setUserName(username);
+            u.setRole("user");
+            userRepo.save(u);
+            logger.info("Auto-provisioned user '{}' in database for battle", username);
+        }
     }
 }

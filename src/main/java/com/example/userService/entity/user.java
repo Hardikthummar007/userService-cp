@@ -18,7 +18,7 @@ public class user {
     String coutry;
     int totalProblemSolved;
 
-    @ElementCollection
+    @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "user_problem_ids", joinColumns = @JoinColumn(name = "user_name"))
     @Column(name = "problem_id")
     Set<Integer> problemSolvedId=new HashSet<>();

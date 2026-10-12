@@ -20,4 +20,7 @@ public interface problemClient {
     @Transactional
     @GetMapping("/getProblem")
     ResponseEntity<?> get(@RequestParam int id);
+
+    @GetMapping("/getAllProblem")
+    ResponseEntity<?> getAllProblem();
 }

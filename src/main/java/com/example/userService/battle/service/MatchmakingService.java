@@ -24,6 +24,9 @@ public class MatchmakingService {
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
 
+    @Autowired
+    private BattleService battleService;
+
     // CONCURRENCY DECISION:
     // A single ReentrantLock protects queue modifications and pairing logic on this single instance.
     // In a multi-instance production environment, Redis (e.g. Redis List with LPUSH/RPOP or a Redis Lua script)
@@ -139,22 +142,8 @@ public class MatchmakingService {
         activeBattlePlayers.add(player1);
         activeBattlePlayers.add(player2);
 
-        Long battleId = battleIdSequence.incrementAndGet();
-        logger.info("Matchmaking: MATCH FOUND! BattleId={}, Player1='{}', Player2='{}'", battleId, player1, player2);
-
-        // Notify both players privately via /user/queue/match
-        notifyMatchFound(player1, battleId, player2);
-        notifyMatchFound(player2, battleId, player1);
-    }
-
-    private void notifyMatchFound(String player, Long battleId, String opponent) {
-        MatchFoundDto payload = new MatchFoundDto(battleId, opponent);
-        try {
-            messagingTemplate.convertAndSendToUser(player, "/queue/match", payload);
-            logger.info("Matchmaking: Sent MATCH_FOUND to '{}' for battle {}", player, battleId);
-        } catch (Exception e) {
-            logger.error("Matchmaking: Failed to send MATCH_FOUND to '{}': {}", player, e.getMessage());
-        }
+        // Delegate battle creation, persistence, problem selection and start countdown to BattleService
+        battleService.createBattle(player1, player2);
     }
 
     public boolean isUserInQueue(String username) {

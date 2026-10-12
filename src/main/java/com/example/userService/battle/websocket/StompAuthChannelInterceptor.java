@@ -26,6 +26,10 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     @Autowired
     private JwtUtil jwtUtil;
 
+    @Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.example.userService.battle.service.BattleService battleService;
+
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
@@ -68,6 +72,29 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
                 if (accessor.getUser() == null) {
                     logger.warn("STOMP SEND rejected: Unauthorized attempt to send to '{}'", destination);
                     throw new IllegalArgumentException("Authentication required for battle commands");
+                }
+            }
+        }
+
+        // 3. Authorize SUBSCRIBE: only the two players of a battle may subscribe to /topic/battle/{battleId}
+        if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+            String destination = accessor.getDestination();
+            if (destination != null && destination.startsWith("/topic/battle/")) {
+                if (accessor.getUser() == null) {
+                    logger.warn("STOMP SUBSCRIBE rejected: Anonymous user attempting to subscribe to '{}'", destination);
+                    throw new IllegalArgumentException("Authentication required to subscribe to battle topic");
+                }
+                String username = accessor.getUser().getName();
+                String battleIdStr = destination.substring("/topic/battle/".length()).trim();
+                try {
+                    Long battleId = Long.parseLong(battleIdStr);
+                    if (!battleService.isParticipant(battleId, username)) {
+                        logger.warn("STOMP SUBSCRIBE rejected: User '{}' is not a participant of battle #{}", username, battleId);
+                        throw new IllegalArgumentException("Unauthorized: You are not a participant in battle #" + battleId);
+                    }
+                    logger.info("STOMP SUBSCRIBE: User '{}' authorized to subscribe to /topic/battle/{}", username, battleId);
+                } catch (NumberFormatException e) {
+                    logger.warn("Invalid battleId format in destination '{}'", destination);
                 }
             }
         }

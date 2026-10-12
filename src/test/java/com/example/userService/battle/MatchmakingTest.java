@@ -21,8 +21,31 @@ public class MatchmakingTest {
     @Autowired
     private MatchmakingService matchmakingService;
 
+    @Autowired
+    private com.example.userService.repo.userRepo userRepo;
+
+    private void ensureUserExists(String username) {
+        if (userRepo.findById(username).isEmpty()) {
+            com.example.userService.entity.user u = new com.example.userService.entity.user();
+            u.setUserName(username);
+            u.setPassword("pass");
+            u.setRole("user");
+            u.setEmail(username + "@test.com");
+            u.setCoutry("US");
+            u.setTotalProblemSolved(0);
+            userRepo.save(u);
+        }
+    }
+
     @BeforeEach
     void setup() {
+        ensureUserExists("userA");
+        ensureUserExists("userB");
+        ensureUserExists("userC");
+        for (int i = 0; i < 20; i++) {
+            ensureUserExists("concurrent_user_" + i);
+        }
+
         // Clear any players left over from other tests
         matchmakingService.leaveQueue("userA");
         matchmakingService.leaveQueue("userB");

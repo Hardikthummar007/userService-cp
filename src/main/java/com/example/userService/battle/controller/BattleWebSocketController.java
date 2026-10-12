@@ -34,6 +34,9 @@ public class BattleWebSocketController {
         matchmakingService.joinQueue(username);
     }
 
+    @Autowired
+    private com.example.userService.battle.service.BattleService battleService;
+
     /**
      * User cancels search -> client sends STOMP frame to /app/battle/leave
      */
@@ -45,5 +48,24 @@ public class BattleWebSocketController {
         String username = principal.getName();
         logger.info("Received /app/battle/leave from user: '{}'", username);
         matchmakingService.leaveQueue(username);
+    }
+
+    /**
+     * User surrenders / forfeits active battle -> sends STOMP frame to /app/battle/forfeit
+     * Body: { "battleId": 18 }
+     */
+    @MessageMapping("/battle/forfeit")
+    public void forfeitBattle(Principal principal, java.util.Map<String, Object> payload) {
+        if (principal == null || payload == null || payload.get("battleId") == null) {
+            return;
+        }
+        try {
+            Long battleId = Long.valueOf(payload.get("battleId").toString());
+            String username = principal.getName();
+            logger.info("Received /app/battle/forfeit from user: '{}' for battle #{}", username, battleId);
+            battleService.forfeitBattle(battleId, username);
+        } catch (Exception e) {
+            logger.error("Error processing STOMP forfeit: {}", e.getMessage());
+        }
     }
 }

@@ -338,6 +338,37 @@ public class BattleService {
     }
 
     /**
+     * Handles user voluntary surrender / forfeit.
+     * Declares the opponent the winner with reason FORFEIT.
+     */
+    public boolean forfeitBattle(Long battleId, String username) {
+        Optional<Battle> battleOpt = battleRepository.findById(battleId);
+        if (battleOpt.isEmpty()) {
+            throw new NoSuchElementException("Battle #" + battleId + " not found");
+        }
+
+        Battle battle = battleOpt.get();
+        if (battle.getStatus() != BattleStatus.ACTIVE) {
+            logger.info("Battle #{} is in status {}, cannot forfeit", battleId, battle.getStatus());
+            return false;
+        }
+
+        if (!username.equals(battle.getPlayer1()) && !username.equals(battle.getPlayer2())) {
+            throw new SecurityException("User '" + username + "' is not a participant of battle #" + battleId);
+        }
+
+        String winner = username.equals(battle.getPlayer1()) ? battle.getPlayer2() : battle.getPlayer1();
+        int updated = battleRepository.finishBattleAtomic(battleId, winner, BattleEndReason.FORFEIT);
+        if (updated == 1) {
+            logger.info("🏳️ Battle #{} forfeited by '{}'. Winner: '{}'", battleId, username, winner);
+            broadcastBattleEnd(battleId, winner, BattleEndReason.FORFEIT);
+            cleanupBattlePlayers(battle.getPlayer1(), battle.getPlayer2());
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Picks an unsolved problem matching difficulty configuration.
      */
     public problems selectProblemForPlayers(String player1, String player2) {
